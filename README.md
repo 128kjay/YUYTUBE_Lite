@@ -14,9 +14,9 @@ pip install PyQt6 PyQt6-WebEngine requests
 3. Open chat 
 
 # AppData Location
-Windows: registry under HKEY_CURRENT_USER\Software\YUYTools\YUYTubeLite
-macOS: ~/Library/Preferences/com.yuytools.YUYTubeLite.plist
-Linux: ~/.config/YUYTools/YUYTubeLite.conf
+- Windows: registry under HKEY_CURRENT_USER\Software\YUYTools\YUYTubeLite
+- macOS: ~/Library/Preferences/com.yuytools.YUYTubeLite.plist
+- Linux: ~/.config/YUYTools/YUYTubeLite.conf
 
 
 # IMG
