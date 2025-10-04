@@ -8,6 +8,7 @@ import requests
 from PyQt6 import QtCore, QtWidgets
 from PyQt6.QtCore import QUrl
 from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
 
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
 
@@ -216,7 +217,7 @@ def fetch_live_and_upcoming(channel_input: str, api_key: Optional[str], debug: b
     results = rows_from(live_items, "live") + rows_from(upcoming_items, "upcoming")
 
     if not results:
-        # fallback: scan recent uploads and classify via liveStreamingDetails
+        # fallback scan recent uploads 
         recent_ids = _search_recent_upload_ids(channel_id, 120, api_key, debug)
         det = _videos_details(recent_ids, api_key, debug)
         for vid, d in det.items():
@@ -248,7 +249,7 @@ def fetch_live_and_upcoming(channel_input: str, api_key: Optional[str], debug: b
 
 
 class WorkerSignals(QtCore.QObject):
-    finished = QtCore.pyqtSignal(object)  # List[Dict]
+    finished = QtCore.pyqtSignal(object)  # List
     failed = QtCore.pyqtSignal(str)
 
 
@@ -272,8 +273,11 @@ class FetchWorker(QtCore.QRunnable):
 class MainWindow(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("YUYTube Lite v0.3")
+        self.setWindowTitle("YUYTube Lite v0.4")
         self.resize(900, 700)
+
+        # settings stored in OS settings store.
+        self.settings = QtCore.QSettings("YUYTools", "YUYTubeLite")
 
         self.pool = QtCore.QThreadPool.globalInstance()
 
@@ -281,12 +285,15 @@ class MainWindow(QtWidgets.QWidget):
         self.apiLabel = QtWidgets.QLabel("YouTube API Key:")
         self.apiEdit = QtWidgets.QLineEdit()
         self.apiEdit.setPlaceholderText("YoutubeDataV3 Key or set the .env YT_API_KEY")
-        self.apiEdit.setText(os.getenv("YT_API_KEY", ""))
+        # Load saved API key or fallback to env var
+        saved_key = self.settings.value("api_key", type=str) or os.getenv("YT_API_KEY", "")
+        self.apiEdit.setText(saved_key)
         self.apiEdit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
 
         self.handleLabel = QtWidgets.QLabel('Channel @handle or URL:')
         self.handleEdit = QtWidgets.QLineEdit()
         self.handleEdit.setPlaceholderText("@somechannel or https://www.youtube.com/@128kJ")
+        self.handleEdit.setText(self.settings.value("last_channel", type=str) or "")
 
         self.fetchBtn = QtWidgets.QPushButton("Fetch Streams")
         self.fetchBtn.clicked.connect(self.on_fetch)
@@ -319,9 +326,28 @@ class MainWindow(QtWidgets.QWidget):
         urlRow.addWidget(self.urlValue, 1)
         urlRow.addWidget(self.openBtn)
 
-        # browser
+        base_dir = QtCore.QStandardPaths.writableLocation(
+            QtCore.QStandardPaths.StandardLocation.AppDataLocation
+        )
+        cache_dir = os.path.join(base_dir, "web_cache")
+        storage_dir = os.path.join(base_dir, "web_storage")
+        os.makedirs(cache_dir, exist_ok=True)
+        os.makedirs(storage_dir, exist_ok=True)
+
+        self.webProfile = QWebEngineProfile("YUYTubeProfile", self)
+        self.webProfile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
+        self.webProfile.setCachePath(cache_dir)
+        self.webProfile.setPersistentStoragePath(storage_dir)
+        self.webProfile.setPersistentCookiesPolicy(
+            QWebEngineProfile.PersistentCookiesPolicy.AllowPersistentCookies
+        )
+        # cache size
+        # self.webProfile.setHttpCacheMaximumSize(200 * 1024 * 1024)
+
         self.webView = QWebEngineView()
-        self.webView.setUrl(QUrl("https://www.youtube.com/@128kJ"))  # default
+        self.webPage = QWebEnginePage(self.webProfile, self.webView)
+        self.webView.setPage(self.webPage)
+        self.webView.setUrl(QUrl(self.settings.value("last_url", type=str) or "https://www.youtube.com/@128kJ"))
 
         self.status = QtWidgets.QLabel("Ready.")
         self.status.setStyleSheet("color:#666;")
@@ -333,6 +359,18 @@ class MainWindow(QtWidgets.QWidget):
         lay.addLayout(urlRow)
         lay.addWidget(self.webView, 1)
         lay.addWidget(self.status)
+
+    def _save_settings(self):
+        self.settings.setValue("api_key", self.apiEdit.text())
+        self.settings.setValue("last_channel", self.handleEdit.text())
+        # whatever page is currently displayed
+        current_url = self.webView.url().toString() if self.webView.url().isValid() else ""
+        self.settings.setValue("last_url", current_url)
+
+    def closeEvent(self, event):
+        # Save on close
+        self._save_settings()
+        super().closeEvent(event)
 
     def on_fetch(self):
         api_key = self.apiEdit.text().strip() or None
@@ -348,6 +386,9 @@ class MainWindow(QtWidgets.QWidget):
         self.set_status("Fetching…")
         self.combo.clear()
         self.urlValue.clear()
+
+        # Save immediately, in case of crash or forced quit
+        self._save_settings()
 
         worker = FetchWorker(channel_input, api_key, debug=False)
         worker.signals.finished.connect(self.on_fetch_finished)
@@ -401,6 +442,8 @@ class MainWindow(QtWidgets.QWidget):
         chat_url = f"https://www.youtube.com/live_chat?is_popout=1&v={vid_id}"
         self.webView.setUrl(QUrl(chat_url))
         self.set_status("Loading chat…")
+        # Save the current URL so it restores next launch
+        self.settings.setValue("last_url", chat_url)
 
     def _extract_video_id(self, text: str) -> Optional[str]:
         if not text:
@@ -421,6 +464,9 @@ class MainWindow(QtWidgets.QWidget):
 
 
 def main():
+    QtCore.QCoreApplication.setOrganizationName("YUYTools")
+    QtCore.QCoreApplication.setApplicationName("YUYTubeLite")
+
     app = QtWidgets.QApplication(sys.argv)
     w = MainWindow()
     w.show()
