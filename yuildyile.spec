@@ -60,5 +60,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name='YUYTubeLite v0.4'
+    name='YUYTubeLite v0.5'
 )
