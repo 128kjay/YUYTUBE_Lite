@@ -20,7 +20,7 @@ for pkg in packages_to_collect:
 block_cipher = None
 
 a = Analysis(
-    ['yuytubelite.py'], 
+    ['yuytube_lite.py'], 
     pathex=[],
     binaries=binaries,
     datas=datas,
