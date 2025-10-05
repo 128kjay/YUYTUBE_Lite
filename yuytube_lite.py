@@ -1,3 +1,8 @@
+"""
+Requirements:
+  pip install PyQt6 PyQt6-WebEngine requests
+"""
+
 import os
 import re
 import sys
@@ -7,6 +12,7 @@ from typing import Dict, List, Optional
 import requests
 from PyQt6 import QtCore, QtWidgets
 from PyQt6.QtCore import QUrl
+from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
 
@@ -217,7 +223,6 @@ def fetch_live_and_upcoming(channel_input: str, api_key: Optional[str], debug: b
     results = rows_from(live_items, "live") + rows_from(upcoming_items, "upcoming")
 
     if not results:
-        # fallback scan recent uploads 
         recent_ids = _search_recent_upload_ids(channel_id, 120, api_key, debug)
         det = _videos_details(recent_ids, api_key, debug)
         for vid, d in det.items():
@@ -234,7 +239,7 @@ def fetch_live_and_upcoming(channel_input: str, api_key: Optional[str], debug: b
                                 "scheduledStartTime": lsd.get("scheduledStartTime"),
                                 "actualStartTime": lsd.get("actualStartTime")})
 
-    # LIVE first then upcoming by time
+    # dedupe & sort
     dedup: Dict[str, Dict] = {}
     for r in results:
         dedup[r["videoId"]] = r
@@ -269,27 +274,132 @@ class FetchWorker(QtCore.QRunnable):
         except Exception as e:
             self.signals.failed.emit(str(e))
 
+class SettingsDialog(QtWidgets.QDialog):
+    """Pop-out dialog to edit API key and manage quick messages."""
+    apiKeySaved = QtCore.pyqtSignal(str)
+    messagesSaved = QtCore.pyqtSignal(list)
 
+    def __init__(self, parent: Optional[QtWidgets.QWidget], settings: QtCore.QSettings):
+        super().__init__(parent)
+        self.setWindowTitle("Settings")
+        self.resize(640, 420)
+        self.settings = settings
+
+        # --- API key group ---
+        apiGroup = QtWidgets.QGroupBox("YouTube Data API Key")
+        self.apiEdit = QtWidgets.QLineEdit()
+        self.apiEdit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self.apiEdit.setPlaceholderText("Enter your API key…")
+        self.apiEdit.setText(self.settings.value("api_key", type=str) or os.getenv("YT_API_KEY", ""))
+
+        apiLayout = QtWidgets.QHBoxLayout(apiGroup)
+        apiLayout.addWidget(self.apiEdit)
+
+        # --- Quick messages group ---
+        msgGroup = QtWidgets.QGroupBox("Quick Messages")
+        self.listWidget = QtWidgets.QListWidget()
+        self.listWidget.addItems([str(s) for s in (self.settings.value("quick_messages", type=list) or [])])
+
+        self.inputEdit = QtWidgets.QLineEdit()
+        self.inputEdit.setPlaceholderText("Type a message…")
+
+        self.addBtn = QtWidgets.QPushButton("Add")
+        self.addBtn.clicked.connect(self.add_from_input)
+
+        self.pasteAddBtn = QtWidgets.QPushButton("Paste+Add")
+        self.pasteAddBtn.clicked.connect(self.paste_and_add)
+
+        self.removeBtn = QtWidgets.QPushButton("Remove Selected")
+        self.removeBtn.clicked.connect(self.remove_selected)
+
+        self.clearBtn = QtWidgets.QPushButton("Clear All")
+        self.clearBtn.clicked.connect(self.listWidget.clear)
+
+        msgBtnsTop = QtWidgets.QHBoxLayout()
+        msgBtnsTop.addWidget(self.inputEdit, 1)
+        msgBtnsTop.addWidget(self.addBtn)
+        msgBtnsTop.addWidget(self.pasteAddBtn)
+
+        msgBtnsBottom = QtWidgets.QHBoxLayout()
+        msgBtnsBottom.addStretch(1)
+        msgBtnsBottom.addWidget(self.removeBtn)
+        msgBtnsBottom.addWidget(self.clearBtn)
+
+        msgLayout = QtWidgets.QVBoxLayout(msgGroup)
+        msgLayout.addWidget(self.listWidget, 1)
+        msgLayout.addLayout(msgBtnsTop)
+        msgLayout.addLayout(msgBtnsBottom)
+
+        # --- Dialog buttons ---
+        self.saveBtn = QtWidgets.QPushButton("Save")
+        self.saveBtn.setDefault(True)
+        self.saveBtn.clicked.connect(self.save_and_close)
+
+        self.cancelBtn = QtWidgets.QPushButton("Close")
+        self.cancelBtn.clicked.connect(self.reject)
+
+        btnRow = QtWidgets.QHBoxLayout()
+        btnRow.addStretch(1)
+        btnRow.addWidget(self.saveBtn)
+        btnRow.addWidget(self.cancelBtn)
+
+        # --- Layout ---
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.addWidget(apiGroup)
+        lay.addWidget(msgGroup, 1)
+        lay.addLayout(btnRow)
+
+    # ----- Quick messages helpers -----
+    def add_from_input(self):
+        text = self.inputEdit.text().strip()
+        if not text:
+            return
+        self._add_unique(text)
+        self.inputEdit.clear()
+
+    def paste_and_add(self):
+        text = QGuiApplication.clipboard().text().strip()
+        if not text:
+            return
+        self._add_unique(text)
+
+    def _add_unique(self, text: str):
+        existing = [self.listWidget.item(i).text() for i in range(self.listWidget.count())]
+        if text not in existing:
+            self.listWidget.addItem(text)
+            self.listWidget.setCurrentRow(self.listWidget.count() - 1)
+        else:
+            self.listWidget.setCurrentRow(existing.index(text))
+
+    def remove_selected(self):
+        for item in self.listWidget.selectedItems():
+            self.listWidget.takeItem(self.listWidget.row(item))
+
+    def save_and_close(self):
+        # Save API key
+        key = self.apiEdit.text().strip()
+        self.settings.setValue("api_key", key)
+        self.apiKeySaved.emit(key)
+
+        # Save messages
+        msgs = [self.listWidget.item(i).text().strip() for i in range(self.listWidget.count()) if self.listWidget.item(i).text().strip()]
+        self.settings.setValue("quick_messages", msgs)
+        self.messagesSaved.emit(msgs)
+        self.accept()
+
+
+# ---------------- Main Window ----------------
 class MainWindow(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("YUYTube Lite v0.4")
-        self.resize(900, 700)
+        self.setWindowTitle("YUYTube Lite v0.5")
+        self.resize(900, 760)
 
-        # settings stored in OS settings store.
+        # settings
         self.settings = QtCore.QSettings("YUYTools", "YUYTubeLite")
-
         self.pool = QtCore.QThreadPool.globalInstance()
 
         # inputs
-        self.apiLabel = QtWidgets.QLabel("YouTube API Key:")
-        self.apiEdit = QtWidgets.QLineEdit()
-        self.apiEdit.setPlaceholderText("YoutubeDataV3 Key or set the .env YT_API_KEY")
-        # Load saved API key or fallback to env var
-        saved_key = self.settings.value("api_key", type=str) or os.getenv("YT_API_KEY", "")
-        self.apiEdit.setText(saved_key)
-        self.apiEdit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
-
         self.handleLabel = QtWidgets.QLabel('Channel @handle or URL:')
         self.handleEdit = QtWidgets.QLineEdit()
         self.handleEdit.setPlaceholderText("@somechannel or https://www.youtube.com/@128kJ")
@@ -299,11 +409,9 @@ class MainWindow(QtWidgets.QWidget):
         self.fetchBtn.clicked.connect(self.on_fetch)
 
         topForm = QtWidgets.QGridLayout()
-        topForm.addWidget(self.apiLabel, 0, 0)
-        topForm.addWidget(self.apiEdit, 0, 1, 1, 2)
-        topForm.addWidget(self.handleLabel, 1, 0)
-        topForm.addWidget(self.handleEdit, 1, 1)
-        topForm.addWidget(self.fetchBtn, 1, 2)
+        topForm.addWidget(self.handleLabel, 0, 0)
+        topForm.addWidget(self.handleEdit, 0, 1)
+        topForm.addWidget(self.fetchBtn, 0, 2)
 
         # results
         self.combo = QtWidgets.QComboBox()
@@ -326,6 +434,7 @@ class MainWindow(QtWidgets.QWidget):
         urlRow.addWidget(self.urlValue, 1)
         urlRow.addWidget(self.openBtn)
 
+        # --- Persistent WebEngine profile (cookies, localStorage, cache) ---
         base_dir = QtCore.QStandardPaths.writableLocation(
             QtCore.QStandardPaths.StandardLocation.AppDataLocation
         )
@@ -341,42 +450,74 @@ class MainWindow(QtWidgets.QWidget):
         self.webProfile.setPersistentCookiesPolicy(
             QWebEngineProfile.PersistentCookiesPolicy.AllowPersistentCookies
         )
-        # cache size
-        # self.webProfile.setHttpCacheMaximumSize(200 * 1024 * 1024)
 
         self.webView = QWebEngineView()
         self.webPage = QWebEnginePage(self.webProfile, self.webView)
         self.webView.setPage(self.webPage)
         self.webView.setUrl(QUrl(self.settings.value("last_url", type=str) or "https://www.youtube.com/@128kJ"))
 
+        # ---- Bottom bar: quick messages + tools ----
+        self.quickLabel = QtWidgets.QLabel("Quick message:")
+        self.quickCombo = QtWidgets.QComboBox()
+        self.quickCombo.setEditable(False)
+        self.quickCombo.setMinimumContentsLength(40)
+
+        self.copyBtn = QtWidgets.QPushButton("Copy Selected")
+        self.copyBtn.setToolTip("Copy the selected quick message to clipboard")
+        self.copyBtn.clicked.connect(self.copy_selected_message)
+
+        self.loadTemplatesBtn = QtWidgets.QPushButton("Load Templates")
+        self.loadTemplatesBtn.setToolTip("Fill dropdown with preset copy/paste messages")
+        self.loadTemplatesBtn.clicked.connect(self.load_default_messages)
+
+        self.editBtn = QtWidgets.QPushButton("⚙️")
+        self.editBtn.setFixedWidth(36)
+        self.editBtn.setToolTip("Open settings (API key + quick messages)")
+        self.editBtn.clicked.connect(self.open_settings_dialog)
+
+        bottomBar = QtWidgets.QHBoxLayout()
+        bottomBar.addWidget(self.quickLabel)
+        bottomBar.addWidget(self.quickCombo, 1)
+        bottomBar.addWidget(self.copyBtn)
+        bottomBar.addWidget(self.loadTemplatesBtn)
+        bottomBar.addWidget(self.editBtn)
+
+        # status
         self.status = QtWidgets.QLabel("Ready.")
         self.status.setStyleSheet("color:#666;")
 
+        # layout
         lay = QtWidgets.QVBoxLayout(self)
         lay.addLayout(topForm)
         lay.addSpacing(6)
         lay.addLayout(row)
         lay.addLayout(urlRow)
         lay.addWidget(self.webView, 1)
+        lay.addLayout(bottomBar)
         lay.addWidget(self.status)
 
+        # Load saved quick messages (if any)
+        self.load_saved_messages()
+
+    # ---------- Persistence helpers ----------
     def _save_settings(self):
-        self.settings.setValue("api_key", self.apiEdit.text())
         self.settings.setValue("last_channel", self.handleEdit.text())
-        # whatever page is currently displayed
         current_url = self.webView.url().toString() if self.webView.url().isValid() else ""
         self.settings.setValue("last_url", current_url)
 
     def closeEvent(self, event):
-        # Save on close
         self._save_settings()
+        # persist quick messages on close
+        self.save_current_messages()
         super().closeEvent(event)
 
+    # ---------- Actions ----------
     def on_fetch(self):
-        api_key = self.apiEdit.text().strip() or None
+        api_key = (self.settings.value("api_key", type=str) or "").strip() or None
         channel_input = self.handleEdit.text().strip()
+
         if not api_key:
-            self.set_status("Supply a YouTube Data API key.", error=True)
+            self.set_status("No API key set. Click ⚙️ to add your YouTube Data API key.", error=True)
             return
         if not channel_input:
             self.set_status("Enter an @handle or channel URL/ID.", error=True)
@@ -387,7 +528,6 @@ class MainWindow(QtWidgets.QWidget):
         self.combo.clear()
         self.urlValue.clear()
 
-        # Save immediately, in case of crash or forced quit
         self._save_settings()
 
         worker = FetchWorker(channel_input, api_key, debug=False)
@@ -408,7 +548,6 @@ class MainWindow(QtWidgets.QWidget):
             label = f"{prefix} {r['status']}: {r['title']}"
             if when:
                 label += f"  ({when})"
-            # store (url, videoId) in userData
             self.combo.addItem(label, (r["url"], r["videoId"]))
         self.combo.setCurrentIndex(0)
         self.on_combo_changed(0)
@@ -442,7 +581,6 @@ class MainWindow(QtWidgets.QWidget):
         chat_url = f"https://www.youtube.com/live_chat?is_popout=1&v={vid_id}"
         self.webView.setUrl(QUrl(chat_url))
         self.set_status("Loading chat…")
-        # Save the current URL so it restores next launch
         self.settings.setValue("last_url", chat_url)
 
     def _extract_video_id(self, text: str) -> Optional[str]:
@@ -462,6 +600,54 @@ class MainWindow(QtWidgets.QWidget):
         self.status.setText(text)
         self.status.setStyleSheet("color:#C0392B;" if error else "color:#666;")
 
+    # ---------- Quick messages: load/save/copy ----------
+    def load_default_messages(self):
+        templates = [
+            "🩵 Twitch: https://twitch.tv/yuy_ix 🩵 Discord: https://discord.gg/yuy 🩵 X: https://x.com/YUY_IX 🩵",
+            "🩵 TTS IS CURRENTLY DISABLED 🩵",
+            "THANK YOU CHAT🩵"
+        ]
+        self.quickCombo.clear()
+        self.quickCombo.addItems(templates)
+        self.set_status(f"Loaded {len(templates)} quick messages. Use ⚙️ to save/edit.")
+
+    def load_saved_messages(self):
+        saved = self.settings.value("quick_messages", type=list) or []
+        if saved:
+            self.quickCombo.clear()
+            self.quickCombo.addItems([str(s) for s in saved])
+            self.set_status(f"Loaded {len(saved)} saved quick messages.")
+        else:
+            self.set_status("No saved quick messages. Load Templates or use ⚙️ to add your own.")
+
+    def save_current_messages(self):
+        msgs = [self.quickCombo.itemText(i).strip() for i in range(self.quickCombo.count()) if self.quickCombo.itemText(i).strip()]
+        self.settings.setValue("quick_messages", msgs)
+
+    def copy_selected_message(self):
+        msg = self.quickCombo.currentText().strip()
+        if not msg:
+            self.set_status("No quick message selected.", error=True)
+            return
+        QGuiApplication.clipboard().setText(msg)
+        self.set_status("Copied quick message to clipboard.")
+
+    # ---------- Settings dialog ----------
+    def open_settings_dialog(self):
+        dlg = SettingsDialog(self, self.settings)
+        dlg.apiKeySaved.connect(self._on_api_key_saved)
+        dlg.messagesSaved.connect(self._apply_saved_messages_from_dialog)
+        dlg.exec()
+
+    def _apply_saved_messages_from_dialog(self, messages: List[str]):
+        self.quickCombo.clear()
+        self.quickCombo.addItems(messages)
+        if messages:
+            self.quickCombo.setCurrentIndex(0)
+        self.set_status(f"Saved {len(messages)} quick messages.")
+
+    def _on_api_key_saved(self, key: str):
+        self.set_status("API key saved." if key else "API key cleared.")
 
 def main():
     QtCore.QCoreApplication.setOrganizationName("YUYTools")
@@ -471,7 +657,6 @@ def main():
     w = MainWindow()
     w.show()
     sys.exit(app.exec())
-
 
 if __name__ == "__main__":
     main()
