@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 
 import requests
 from PyQt6 import QtCore, QtWidgets
-from PyQt6.QtCore import QUrl
+from PyQt6.QtCore import QUrl, QSize
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
@@ -274,8 +274,8 @@ class FetchWorker(QtCore.QRunnable):
         except Exception as e:
             self.signals.failed.emit(str(e))
 
+
 class SettingsDialog(QtWidgets.QDialog):
-    """Pop-out dialog to edit API key and manage quick messages."""
     apiKeySaved = QtCore.pyqtSignal(str)
     messagesSaved = QtCore.pyqtSignal(list)
 
@@ -376,13 +376,13 @@ class SettingsDialog(QtWidgets.QDialog):
             self.listWidget.takeItem(self.listWidget.row(item))
 
     def save_and_close(self):
-        # Save API key
         key = self.apiEdit.text().strip()
         self.settings.setValue("api_key", key)
         self.apiKeySaved.emit(key)
 
-        # Save messages
-        msgs = [self.listWidget.item(i).text().strip() for i in range(self.listWidget.count()) if self.listWidget.item(i).text().strip()]
+        msgs = [self.listWidget.item(i).text().strip()
+                for i in range(self.listWidget.count())
+                if self.listWidget.item(i).text().strip()]
         self.settings.setValue("quick_messages", msgs)
         self.messagesSaved.emit(msgs)
         self.accept()
@@ -392,8 +392,8 @@ class SettingsDialog(QtWidgets.QDialog):
 class MainWindow(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("YUYTube Lite v0.5")
-        self.resize(900, 760)
+        self.setWindowTitle("YUYTube Lite v0.5.1")
+        self.resize(900, 720)
 
         # settings
         self.settings = QtCore.QSettings("YUYTools", "YUYTubeLite")
@@ -405,17 +405,21 @@ class MainWindow(QtWidgets.QWidget):
         self.handleEdit.setPlaceholderText("@somechannel or https://www.youtube.com/@128kJ")
         self.handleEdit.setText(self.settings.value("last_channel", type=str) or "")
 
-        self.fetchBtn = QtWidgets.QPushButton("Fetch Streams")
+        self.fetchBtn = QtWidgets.QPushButton("Fetch")
+        self.fetchBtn.setFixedHeight(26)
         self.fetchBtn.clicked.connect(self.on_fetch)
 
         topForm = QtWidgets.QGridLayout()
+        topForm.setContentsMargins(6, 6, 6, 2)
+        topForm.setHorizontalSpacing(6)
+        topForm.setVerticalSpacing(4)
         topForm.addWidget(self.handleLabel, 0, 0)
         topForm.addWidget(self.handleEdit, 0, 1)
         topForm.addWidget(self.fetchBtn, 0, 2)
 
         # results
         self.combo = QtWidgets.QComboBox()
-        self.combo.setMinimumContentsLength(50)
+        self.combo.setMinimumContentsLength(40)
         self.combo.setInsertPolicy(QtWidgets.QComboBox.InsertPolicy.NoInsert)
         self.combo.currentIndexChanged.connect(self.on_combo_changed)
 
@@ -424,12 +428,17 @@ class MainWindow(QtWidgets.QWidget):
         self.urlValue.setReadOnly(True)
 
         self.openBtn = QtWidgets.QPushButton("Open Chat")
+        self.openBtn.setFixedHeight(26)
         self.openBtn.clicked.connect(self.open_in_chat_view)
 
         row = QtWidgets.QHBoxLayout()
+        row.setContentsMargins(6, 2, 6, 2)
+        row.setSpacing(6)
         row.addWidget(self.combo, 1)
 
         urlRow = QtWidgets.QHBoxLayout()
+        urlRow.setContentsMargins(6, 2, 6, 2)
+        urlRow.setSpacing(6)
         urlRow.addWidget(self.urlLabel)
         urlRow.addWidget(self.urlValue, 1)
         urlRow.addWidget(self.openBtn)
@@ -456,27 +465,42 @@ class MainWindow(QtWidgets.QWidget):
         self.webView.setPage(self.webPage)
         self.webView.setUrl(QUrl(self.settings.value("last_url", type=str) or "https://www.youtube.com/@128kJ"))
 
-        # ---- Bottom bar: quick messages + tools ----
-        self.quickLabel = QtWidgets.QLabel("Quick message:")
+        # ---- Bottom bar: ultra-compact quick messages + tools ----
         self.quickCombo = QtWidgets.QComboBox()
         self.quickCombo.setEditable(False)
-        self.quickCombo.setMinimumContentsLength(40)
+        self.quickCombo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.quickCombo.setMinimumContentsLength(24)
+        self.quickCombo.setMaximumHeight(24)
+        self.quickCombo.setStyleSheet("""
+            QComboBox { font-size: 11px; padding: 1px 4px; }
+            QComboBox QAbstractItemView { font-size: 11px; }
+        """)
 
-        self.copyBtn = QtWidgets.QPushButton("Copy Selected")
-        self.copyBtn.setToolTip("Copy the selected quick message to clipboard")
+        def tiny_tool_button(text: str, tooltip: str) -> QtWidgets.QToolButton:
+            btn = QtWidgets.QToolButton()
+            btn.setText(text)
+            btn.setToolTip(tooltip)
+            btn.setAutoRaise(True)
+            btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(22)
+            btn.setMinimumWidth(28 if text == "⚙️" else 40)
+            btn.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
+            return btn
+
+        self.copyBtn = tiny_tool_button("Copy", "Copy the selected quick message")
         self.copyBtn.clicked.connect(self.copy_selected_message)
 
-        self.loadTemplatesBtn = QtWidgets.QPushButton("Load Templates")
-        self.loadTemplatesBtn.setToolTip("Fill dropdown with preset copy/paste messages")
+        self.loadTemplatesBtn = tiny_tool_button("Load", "Load template messages")
         self.loadTemplatesBtn.clicked.connect(self.load_default_messages)
 
-        self.editBtn = QtWidgets.QPushButton("⚙️")
-        self.editBtn.setFixedWidth(36)
-        self.editBtn.setToolTip("Open settings (API key + quick messages)")
+        self.editBtn = tiny_tool_button("⚙️", "Open settings (API key + quick messages)")
         self.editBtn.clicked.connect(self.open_settings_dialog)
 
         bottomBar = QtWidgets.QHBoxLayout()
-        bottomBar.addWidget(self.quickLabel)
+        bottomBar.setContentsMargins(6, 2, 6, 6)
+        bottomBar.setSpacing(4)
         bottomBar.addWidget(self.quickCombo, 1)
         bottomBar.addWidget(self.copyBtn)
         bottomBar.addWidget(self.loadTemplatesBtn)
@@ -485,18 +509,20 @@ class MainWindow(QtWidgets.QWidget):
         # status
         self.status = QtWidgets.QLabel("Ready.")
         self.status.setStyleSheet("color:#666;")
+        self.status.setMaximumHeight(18)
 
         # layout
         lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(4)
         lay.addLayout(topForm)
-        lay.addSpacing(6)
         lay.addLayout(row)
         lay.addLayout(urlRow)
         lay.addWidget(self.webView, 1)
         lay.addLayout(bottomBar)
         lay.addWidget(self.status)
 
-        # Load saved quick messages (if any)
+        # Load saved quick messages
         self.load_saved_messages()
 
     # ---------- Persistence helpers ----------
@@ -507,11 +533,9 @@ class MainWindow(QtWidgets.QWidget):
 
     def closeEvent(self, event):
         self._save_settings()
-        # persist quick messages on close
         self.save_current_messages()
         super().closeEvent(event)
 
-    # ---------- Actions ----------
     def on_fetch(self):
         api_key = (self.settings.value("api_key", type=str) or "").strip() or None
         channel_input = self.handleEdit.text().strip()
@@ -621,7 +645,9 @@ class MainWindow(QtWidgets.QWidget):
             self.set_status("No saved quick messages. Load Templates or use ⚙️ to add your own.")
 
     def save_current_messages(self):
-        msgs = [self.quickCombo.itemText(i).strip() for i in range(self.quickCombo.count()) if self.quickCombo.itemText(i).strip()]
+        msgs = [self.quickCombo.itemText(i).strip()
+                for i in range(self.quickCombo.count())
+                if self.quickCombo.itemText(i).strip()]
         self.settings.setValue("quick_messages", msgs)
 
     def copy_selected_message(self):
@@ -649,6 +675,7 @@ class MainWindow(QtWidgets.QWidget):
     def _on_api_key_saved(self, key: str):
         self.set_status("API key saved." if key else "API key cleared.")
 
+
 def main():
     QtCore.QCoreApplication.setOrganizationName("YUYTools")
     QtCore.QCoreApplication.setApplicationName("YUYTubeLite")
@@ -657,6 +684,7 @@ def main():
     w = MainWindow()
     w.show()
     sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     main()
