@@ -1,6 +1,9 @@
 # YUYTUBE_Lite
 Custom Youtube Live Chat side panel with hot links to upcoming streams
 
+note: actions can be destructive, be cautious of mundane choices in everyday conversations. be who you want to be and never let those around you dictate what you bring to this world. 
+with that, this will be the last repo i keep publicly released and i will no longer maintain or review it. please create something and be proud of it. good luck,
+
 # Requirements:
 pip install PyQt6 PyQt6-WebEngine requests
 
